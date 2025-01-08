@@ -22,10 +22,11 @@ export class Requester<T = {}> {
         useCallbacks<(requestOption: RequestOption & T) => false | Promise<false> | Promise<void> | void>();
 
     /** 请求后置callback */
-    afterCallbacks = useCallbacks<(requestOption: RequestOption & T, data: any | RequestError) => void>();
+    afterCallbacks =
+        useCallbacks<(requestOption: RequestOption & T, data: any | RequestError, response?: Response) => void>();
 
     /** 请求错误callback */
-    errorCallbacks = useCallbacks<(error: RequestError<T>) => void>();
+    errorCallbacks = useCallbacks<(error: RequestError<T>, response?: Response) => void>();
 
     constructor(private option: RequesterOption) {}
 
@@ -109,7 +110,7 @@ export class Requester<T = {}> {
             }
 
             //决断结果
-            let judgment = async (jsonData: any) => {
+            let judgment = async (jsonData: any, response: Response) => {
                 let rspData = (await this.option.transformRspData?.(jsonData, requestOption, this.option)) ?? jsonData;
 
                 let success = (rspData: any) => {
@@ -126,7 +127,7 @@ export class Requester<T = {}> {
                         });
                     }
 
-                    requestOption.success?.(rspData);
+                    requestOption.success?.(rspData, response);
 
                     for (let callback of this.afterCallbacks.callbacks) {
                         callback(requestOption, rspData);
@@ -145,9 +146,11 @@ export class Requester<T = {}> {
                                 Object.assign(err, {
                                     option: requestOption
                                 }),
-                                reject
+                                reject,
+                                response
                             );
-                        }
+                        },
+                        response
                     );
                 } else {
                     success(rspData);
@@ -159,7 +162,7 @@ export class Requester<T = {}> {
                 this.option
                     .mock(requestOption)
                     .then(async (data: any) => {
-                        await judgment(data);
+                        await judgment(data, {} as any);
                     })
                     .finally(() => {
                         remove(this.requestList, process);
@@ -176,7 +179,7 @@ export class Requester<T = {}> {
                     signal: controller.signal
                 })
                     //json
-                    .then(async (response: any) => {
+                    .then(async (response) => {
                         if (!response.ok) {
                             let data = await response.text();
                             this.execError(
@@ -197,7 +200,7 @@ export class Requester<T = {}> {
                                 while (true) {
                                     let { done, value } = await reader.read();
                                     if (done) {
-                                        await judgment(rspStr);
+                                        await judgment(rspStr, response);
                                         break;
                                     }
                                     let chunk = decoder.decode(value);
@@ -217,7 +220,7 @@ export class Requester<T = {}> {
                         } else {
                             let jsonData = await response.json();
 
-                            await judgment(jsonData);
+                            await judgment(jsonData, response);
                         }
                     })
                     .catch((e) => {
@@ -277,28 +280,28 @@ export class Requester<T = {}> {
         return;
     }
 
-    private execError(error: RequestError<T>, reject: Function) {
+    private execError(error: RequestError<T>, reject: Function, response?: Response) {
         //字典翻译
         if (this.option.errorCodeMessage) {
             error.message = this.option.errorCodeMessage[error.code] ?? error.message;
         }
         for (let callback of this.afterCallbacks.callbacks) {
-            callback(error.option, error);
+            callback(error.option, error, response);
         }
 
         for (let callback of this.errorCallbacks.callbacks) {
-            callback(error);
+            callback(error, response);
         }
 
         if (error.option.error) {
-            if (error.option.error(error) === false) {
+            if (error.option.error(error, response) === false) {
                 reject(error);
                 return;
             }
         }
 
         if (this.option.defaultErrorFunc) {
-            this.option.defaultErrorFunc(error);
+            this.option.defaultErrorFunc(error, response);
         }
 
         reject(error);
@@ -336,7 +339,7 @@ export type RequesterOption = {
     errorCodeMessage?: Record<string, string>;
 
     /** 自定义默认错误处理 */
-    defaultErrorFunc?: (err: RequestError) => void;
+    defaultErrorFunc?: (err: RequestError, response?: Response) => void;
 
     /** 自定义请求数据转换 */
     transformReqData?: (
@@ -356,7 +359,8 @@ export type RequesterOption = {
     analyRspResult?: (
         data: any,
         success: (data: any) => void,
-        error: (err: Omit<RequestError, "option">) => void
+        error: (err: Omit<RequestError, "option">) => void,
+        response: Response
     ) => void;
 
     mock?: (option: RequestOption & Record<string, any>) => Promise<any>;
@@ -382,9 +386,9 @@ export type RequestOption<T = any> = {
     mock?: boolean;
     cache?: RequestCacheOption | true;
     headers?: Record<string, any>;
-    error?: (err: RequestError) => void | false;
-    success?: (data: any) => void;
-    stream?: (chunk: string, allChunk: string) => void;
+    error?: (err: RequestError, response?: Response) => void | false;
+    success?: (data: any, response?: Response) => void;
+    stream?: (chunk: string, allChunk: string, response?: Response) => void;
 };
 
 function transformRequestBody(data: any) {
