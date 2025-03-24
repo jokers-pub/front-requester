@@ -69,16 +69,21 @@ export class Requester<T = {}> {
                 };
             }
             let requestCacheId = `${requestOption.url}|${requestOption.cache?.id}`;
-            let cacheData = this.getCache(requestCacheId);
 
-            if (cacheData) {
-                requestOption.success?.(cacheData);
+            if (requestOption.forceRefreshCache) {
+                this.deleteCache(requestCacheId);
+            } else {
+                let cacheData = this.getCache(requestCacheId);
 
-                for (let callback of this.afterCallbacks.callbacks) {
-                    callback(requestOption, cacheData);
+                if (cacheData) {
+                    requestOption.success?.(cacheData);
+
+                    for (let callback of this.afterCallbacks.callbacks) {
+                        callback(requestOption, cacheData);
+                    }
+
+                    return Promise.resolve(cacheData);
                 }
-
-                return Promise.resolve(cacheData);
             }
         }
 
@@ -264,6 +269,10 @@ export class Requester<T = {}> {
         return true;
     }
 
+    private deleteCache(cacheId: string) {
+        requestCache.delete(cacheId);
+    }
+
     private getCache(cacheId: string) {
         let cache = requestCache.get(cacheId);
 
@@ -277,7 +286,6 @@ export class Requester<T = {}> {
 
             return cache.data;
         }
-        return;
     }
 
     private execError(error: RequestError<T>, reject: Function, response?: Response) {
@@ -385,6 +393,8 @@ export type RequestOption<T = any> = {
     timeout?: number | false;
     mock?: boolean;
     cache?: RequestCacheOption | true;
+    //强制刷新缓存
+    forceRefreshCache?: boolean;
     headers?: Record<string, any>;
     error?: (err: RequestError, response?: Response) => void | false;
     success?: (data: any, response?: Response) => void;
