@@ -75,7 +75,7 @@ export class Requester<T = {}> {
             } else {
                 let cacheData = this.getCache(requestCacheId);
 
-                if (cacheData) {
+                if (cacheData !== undefined) {
                     requestOption.success?.(cacheData);
 
                     for (let callback of this.afterCallbacks.callbacks) {
