@@ -28,7 +28,7 @@ export class Requester<T = {}> {
     /** 请求错误callback */
     errorCallbacks = useCallbacks<(error: RequestError<T>, response?: Response) => void>();
 
-    constructor(private option: RequesterOption) {}
+    constructor(public option: RequesterOption) {}
 
     /** 请求中队列 */
     requestList: Array<RequestQueueItem> = [];
