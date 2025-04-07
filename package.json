@@ -15,6 +15,10 @@
         "request",
         "service"
     ],
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/jokers-pub/front-requester.git"
+    },
     "homepage": "https://front.jokers.pub",
     "scripts": {
         "build": "joker_build_library --sourcemap=false --terser",
