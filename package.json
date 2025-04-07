@@ -1,6 +1,6 @@
 {
     "name": "@joker.front/requester",
-    "version": "1.0.40",
+    "version": "1.0.41",
     "description": "Joker 接口请求库，可通过该类库实现与@joker.server/core的快速对接。",
     "main": "dist/bundle.js",
     "module": "dist/bundle.es.js",
@@ -20,10 +20,6 @@
         "build": "joker_build_library --sourcemap=false --terser",
         "release": "npm run build && joker_release_library",
         "release:prod": "npm run build && npm publish --access public --registry https://registry.npmjs.org/"
-    },
-    "repository": {
-        "type": "git",
-        "url": "git+https://github.com/jokers-pub/front-requester.git"
     },
     "author": "Zohar",
     "license": "MIT",
