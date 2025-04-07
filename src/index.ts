@@ -163,7 +163,7 @@ export class Requester<T = {}> {
             };
 
             //MOCK 扩展
-            if (this.option.mock && requestOption.mock) {
+            if (this.option.mock) {
                 this.option
                     .mock(requestOption)
                     .then(async (data: any) => {
@@ -391,7 +391,6 @@ export type RequestOption<T = any> = {
     data?: T;
     rspType?: "json" | "stream";
     timeout?: number | false;
-    mock?: boolean;
     cache?: RequestCacheOption | true;
     //强制刷新缓存
     forceRefreshCache?: boolean;
