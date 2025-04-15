@@ -252,9 +252,19 @@ export class Requester<T = {}> {
         });
     }
 
-    public cancelAllRequest() {
+    public cancelAllRequest(filter?: (option: RequestOption) => boolean) {
         for (let request of this.requestList) {
+            if (filter) {
+                if (!filter(request.option)) continue;
+            }
+
             request.cancel();
+        }
+    }
+
+    public cancelRequest(id: string) {
+        for (let request of this.requestList) {
+            if (request.option.id === id) request.cancel();
         }
     }
 
@@ -386,6 +396,8 @@ export type RequestCacheOption = {
  * 请求参数配置
  */
 export type RequestOption<T = any> = {
+    /** 请求ID，可用于主动取消*/
+    id?: string;
     url: string;
     method: RequestMethod;
     data?: T;
