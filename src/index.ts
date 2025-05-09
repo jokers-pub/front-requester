@@ -18,8 +18,7 @@ let requestCache = new Map<
 /** 请求处理程序 */
 export class Requester<T = {}> {
     /** 请求前置callback */
-    beforeCallbacks =
-        useCallbacks<(requestOption: RequestOption & T) => false | Promise<false> | Promise<void> | void>();
+    beforeCallbacks = useCallbacks<(requestOption: RequestOption & T) => false | void>();
 
     /** 请求后置callback */
     afterCallbacks =
@@ -52,7 +51,7 @@ export class Requester<T = {}> {
             requestOption.url = (this.option.base || "") + requestOption.url;
         }
 
-        if ((await this.execBeforeEvent(requestOption)) === false) {
+        if (this.execBeforeEvent(requestOption) === false) {
             return Promise.reject({
                 code: ERROR_CODE_REQUEST_BREAK
             });
@@ -268,10 +267,10 @@ export class Requester<T = {}> {
         }
     }
 
-    private async execBeforeEvent(option: RequestOption<T>) {
+    private execBeforeEvent(option: RequestOption<T>) {
         for (let callBack of this.beforeCallbacks.callbacks) {
             //@ts-ignore 串行
-            if ((await callBack(option)) === false) {
+            if (callBack(option) === false) {
                 return false;
             }
         }
