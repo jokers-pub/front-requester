@@ -10,6 +10,10 @@
         "types/*",
         "README.md"
     ],
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/jokers-pub/front-requester.git"
+    },
     "keywords": [
         "joker",
         "request",
