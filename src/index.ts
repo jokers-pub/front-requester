@@ -131,10 +131,14 @@ export class Requester<T = {}> {
                         });
                     }
 
-                    requestOption.success?.(rspData, response);
+                    try {
+                        requestOption.success?.(rspData, response);
 
-                    for (let callback of this.afterCallbacks.callbacks) {
-                        callback(requestOption, rspData);
+                        for (let callback of this.afterCallbacks.callbacks) {
+                            callback(requestOption, rspData);
+                        }
+                    } catch (e) {
+                        console.error(e);
                     }
                     resolve(rspData);
                 };
@@ -302,21 +306,24 @@ export class Requester<T = {}> {
         if (this.option.errorCodeMessage) {
             error.message = this.option.errorCodeMessage[error.code] ?? error.message;
         }
-        for (let callback of this.afterCallbacks.callbacks) {
-            callback(error.option, error, response);
-        }
-
-        for (let callback of this.errorCallbacks.callbacks) {
-            callback(error, response);
-        }
-
-        if (error.option.error) {
-            if (error.option.error(error, response) === false) {
-                reject(error);
-                return;
+        try {
+            for (let callback of this.afterCallbacks.callbacks) {
+                callback(error.option, error, response);
             }
-        }
 
+            for (let callback of this.errorCallbacks.callbacks) {
+                callback(error, response);
+            }
+
+            if (error.option.error) {
+                if (error.option.error(error, response) === false) {
+                    reject(error);
+                    return;
+                }
+            }
+        } catch (e) {
+            console.error(e);
+        }
         if (this.option.defaultErrorFunc) {
             this.option.defaultErrorFunc(error, response);
         }
