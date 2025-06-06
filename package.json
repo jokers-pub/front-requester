@@ -21,6 +21,10 @@
         "release": "npm run build && joker_release_library",
         "release:prod": "npm run build && npm publish --access public --registry https://registry.npmjs.org/"
     },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/jokers-pub/front-requester.git"
+    },
     "author": "Zohar",
     "license": "MIT",
     "devDependencies": {
