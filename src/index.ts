@@ -203,17 +203,29 @@ export class Requester<T = {}> {
                         if (requestOption.rspType === "stream") {
                             let reader = response.body?.getReader();
                             let decoder = new TextDecoder();
-                            let rspStr = "";
+
                             if (reader) {
                                 while (true) {
                                     let { done, value } = await reader.read();
+
+                                    let chunk = decoder.decode(value);
+                                    // 2. 按 SSE 结束符 \n\n 拆分消息块（核心：区分多条消息）
+                                    const sseBlocks = chunk.split("\n\n").filter(Boolean); // 过滤空块
+
+                                    sseBlocks.map((n) => {
+                                        const dataMatch = n.match(/^data:\s*(.*)/);
+                                        if (dataMatch) {
+                                            // 多行 data: 会自动拼接（SSE 协议规则）
+                                            requestOption.stream?.(dataMatch[1] || "");
+                                        }
+
+                                        requestOption.stream?.(n || "");
+                                    });
+
                                     if (done) {
-                                        await judgment(rspStr, response);
+                                        await judgment("", response);
                                         break;
                                     }
-                                    let chunk = decoder.decode(value);
-                                    rspStr += chunk;
-                                    requestOption.stream?.(chunk, rspStr);
                                 }
                             } else {
                                 this.execError(
@@ -415,7 +427,7 @@ export type RequestOption<T = any> = {
     headers?: Record<string, any>;
     error?: (err: RequestError, response?: Response) => void | false;
     success?: (data: any, response?: Response) => void;
-    stream?: (chunk: string, allChunk: string, response?: Response) => void;
+    stream?: (chunk: string, response?: Response) => void;
 };
 
 function transformRequestBody(data: any) {
