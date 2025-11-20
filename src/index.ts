@@ -217,8 +217,6 @@ export class Requester<T = {}> {
                                         if (dataMatch) {
                                             // 多行 data: 会自动拼接（SSE 协议规则）
                                             requestOption.stream?.(dataMatch[1] || "");
-                                        } else {
-                                            requestOption.stream?.(n || "");
                                         }
                                     });
 
