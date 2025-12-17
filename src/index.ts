@@ -180,8 +180,14 @@ export class Requester<T = {}> {
                     });
             } else {
                 let { body, headers } = transformRequestBody(requestOption.data);
+
+                if (requestOption.method === "GET") {
+                    // 2. 复杂参数（推荐使用 URLSearchParams）
+                    const params = new URLSearchParams(body as any);
+                    requestOption.url += `?${params.toString()}`;
+                }
                 fetch(requestOption.url, {
-                    body: body,
+                    body: requestOption.method === "GET" ? undefined : body,
                     headers: Object.assign(headers, requestOption.headers),
                     method: requestOption.method,
                     signal: controller.signal
