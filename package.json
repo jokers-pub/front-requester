@@ -17,7 +17,7 @@
     ],
     "homepage": "https://front.jokers.pub",
     "scripts": {
-        "build": "joker_build_library --sourcemap=false --terser",
+        "build": "joker_build_library ",
         "release": "npm run build && joker_release_library",
         "release:prod": "npm run build && npm publish --access public --registry https://registry.npmjs.org/"
     },
