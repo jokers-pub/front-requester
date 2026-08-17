@@ -17,26 +17,20 @@ let requestCache = new Map<
 
 /** 请求处理程序 */
 export class Requester<T = {}> {
-    /** 请求前置callback */
     beforeCallbacks = useCallbacks<(requestOption: RequestOption & T) => false | void>();
-
-    /** 请求后置callback */
     afterCallbacks =
         useCallbacks<(requestOption: RequestOption & T, data: any | RequestError, response?: Response) => void>();
-
-    /** 请求错误callback */
     errorCallbacks = useCallbacks<(error: RequestError<T>, response?: Response) => void>();
 
     constructor(public option: RequesterOption) {}
 
-    /** 请求中队列 */
     requestList: Array<RequestQueueItem> = [];
 
-    /** 请求接口 */
     public async request<I = any, O = any>(
         url: string,
         option?: Partial<Omit<RequestOption<I>, "url"> & T>
     ): Promise<O> {
+        // ---------- 仅执行一次的前置处理 ----------
         let requestOption: RequestOption & T = Object.assign(
             {
                 url,
@@ -61,220 +55,194 @@ export class Requester<T = {}> {
             (await this.option.transformReqData?.(requestOption.data, requestOption, this.option)) ??
             requestOption.data;
 
+        // 缓存命中直接返回，不进入重试
         if (requestOption.cache) {
             if (requestOption.cache === true) {
-                requestOption.cache = {
-                    id: ""
-                };
+                requestOption.cache = { id: "" };
             }
             let requestCacheId = `${requestOption.url}|${requestOption.cache?.id}`;
-
             if (requestOption.forceRefreshCache) {
                 this.deleteCache(requestCacheId);
             } else {
                 let cacheData = this.getCache(requestCacheId);
-
                 if (cacheData !== undefined) {
                     requestOption.success?.(cacheData);
-
                     for (let callback of this.afterCallbacks.callbacks) {
                         callback(requestOption, cacheData);
                     }
-
                     return Promise.resolve(cacheData);
                 }
             }
         }
 
+        // ---------- 重试配置 ----------
+        const maxRetries = option?.retry ?? this.option.maxRetry ?? 0;
+        const retryDelay = option?.retryDelay ?? this.option.retryDelay ?? 0;
+        let lastError: any;
+
+        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+            try {
+                const result = await this._execute(requestOption);
+                // 成功：更新缓存（若有）
+                this.setCache(requestOption, result);
+                // 成功回调
+                requestOption.success?.(result);
+                for (let callback of this.afterCallbacks.callbacks) {
+                    callback(requestOption, result);
+                }
+                return result;
+            } catch (err) {
+                lastError = err;
+                // 判断是否可重试，若不可重试或已达最大次数则跳出
+                if (!this.shouldRetry(err) || attempt === maxRetries) {
+                    break;
+                }
+                // 重试前等待间隔，避开瞬时网络抖动
+                if (retryDelay > 0) {
+                    await new Promise((r) => setTimeout(r, retryDelay));
+                }
+            }
+        }
+
+        // ---------- 最终失败处理 ----------
+        return new Promise((resolve, reject) => {
+            this.execError(lastError, reject);
+        });
+    }
+
+    /** 单次请求执行（无任何用户回调） */
+    private _execute(requestOption: RequestOption & T): Promise<any> {
         return new Promise((resolve, reject) => {
             let controller = new AbortController();
-            let process = {
+            let process: RequestQueueItem = {
                 option: requestOption,
-                cancel: () => {
-                    controller.abort();
-                }
+                cancel: () => controller.abort()
             };
 
             let timeOutTimer: number | undefined;
             let timeout = this.option.timeout;
-            if (option?.timeout !== false) {
-                timeout = option?.timeout;
+            if (requestOption.timeout !== false) {
+                timeout = requestOption.timeout;
             }
 
             if (timeout !== false && timeout) {
                 timeOutTimer = setTimeout(() => {
                     controller.abort();
-                    let error = {
+                    reject({
                         code: ERROR_CDODE_TIME_OUT,
                         message: "请求超时，请稍后重试",
                         option: requestOption
-                    };
-                    this.execError(error, reject);
+                    });
                 }, timeout * 1000);
             }
 
-            //决断结果
-            let judgment = async (jsonData: any, response: Response) => {
+            // 响应解析（不含回调）
+            const handleResponse = async (jsonData: any, response: Response) => {
                 let rspData = (await this.option.transformRspData?.(jsonData, requestOption, this.option)) ?? jsonData;
 
-                let success = (rspData: any) => {
-                    if (requestOption.cache) {
-                        if (requestOption.cache === true) {
-                            requestOption.cache = {
-                                id: ""
-                            };
-                        }
-                        requestCache.set(`${requestOption.url}|${requestOption.cache.id}`, {
-                            date: Date.now(),
-                            expiresIn: requestOption.cache.expires,
-                            data: rspData
-                        });
-                    }
-
-                    try {
-                        requestOption.success?.(rspData, response);
-
-                        for (let callback of this.afterCallbacks.callbacks) {
-                            callback(requestOption, rspData);
-                        }
-                    } catch (e) {
-                        console.error(e);
-                    }
-                    resolve(rspData);
-                };
-
+                // 若存在自定义解析器，则用其分流
                 if (this.option.analyRspResult) {
-                    this.option.analyRspResult(
-                        rspData,
-                        (data) => {
-                            success(data);
-                        },
-                        (err) => {
-                            this.execError(
-                                Object.assign(err, {
-                                    option: requestOption
-                                }),
-                                reject,
-                                response
-                            );
-                        },
-                        response
-                    );
+                    new Promise<void>((res, rej) => {
+                        this.option.analyRspResult!(
+                            rspData,
+                            (data) => {
+                                resolve(data);
+                                res();
+                            },
+                            (err) => {
+                                rej(Object.assign(err, { option: requestOption }));
+                            },
+                            response
+                        );
+                    }).catch(reject);
                 } else {
-                    success(rspData);
+                    resolve(rspData);
                 }
             };
 
-            //MOCK 扩展
-            if (this.option.mock) {
-                this.option
-                    .mock(requestOption)
-                    .then(async (data: any) => {
-                        await judgment(data, {} as any);
-                    })
-                    .finally(() => {
-                        remove(this.requestList, process);
-                        if (timeOutTimer) {
-                            clearTimeout(timeOutTimer);
-                        }
-                    });
+            // 正常 fetch
+            let fetchOptions: any = {};
+            if (requestOption.method === "GET") {
+                const params = new URLSearchParams(requestOption.data);
+                requestOption.url += `?${params.toString()}`;
+                fetchOptions = {
+                    headers: Object.assign({}, requestOption.headers),
+                    method: requestOption.method,
+                    signal: controller.signal
+                };
             } else {
-                let option: any = {};
-
-                if (requestOption.method === "GET") {
-                    const params = new URLSearchParams(requestOption.data);
-                    requestOption.url += `?${params.toString()}`;
-                    option = {
-                        headers: Object.assign({}, requestOption.headers),
-                        method: requestOption.method,
-                        signal: controller.signal
-                    };
-                } else {
-                    let { body, headers } = transformRequestBody(requestOption.data);
-                    option = {
-                        body: body,
-                        headers: Object.assign(headers, requestOption.headers),
-                        method: requestOption.method,
-                        signal: controller.signal
-                    };
-                }
-                fetch(requestOption.url, option)
-                    //json
-                    .then(async (response) => {
-                        if (!response.ok) {
-                            let data = await response.text();
-                            this.execError(
-                                {
-                                    code: response.status.toString(),
-                                    message: data ?? response.statusText,
-                                    option: requestOption
-                                },
-                                reject
-                            );
-                            return;
-                        }
-                        if (requestOption.rspType === "stream") {
-                            let reader = response.body?.getReader();
-                            let decoder = new TextDecoder();
-
-                            if (reader) {
-                                while (true) {
-                                    let { done, value } = await reader.read();
-
-                                    let chunk = decoder.decode(value);
-                                    // 2. 按 SSE 结束符 \n\n 拆分消息块（核心：区分多条消息）
-                                    const sseBlocks = chunk.split("\n\n").filter(Boolean); // 过滤空块
-
-                                    sseBlocks.map((n) => {
-                                        const dataMatch = n.match(/^data:\s*(.*)/);
-                                        if (dataMatch) {
-                                            // 多行 data: 会自动拼接（SSE 协议规则）
-                                            requestOption.stream?.(dataMatch[1] || "");
-                                        }
-                                    });
-
-                                    if (done) {
-                                        await judgment("", response);
-                                        break;
-                                    }
-                                }
-                            } else {
-                                this.execError(
-                                    {
-                                        code: response.status.toString(),
-                                        message: "流式数据无响应",
-                                        option: requestOption
-                                    },
-                                    reject
-                                );
-                            }
-                        } else {
-                            let jsonData = await response.json();
-
-                            await judgment(jsonData, response);
-                        }
-                    })
-                    .catch((e) => {
-                        let error = {
-                            code: e.name === "AbortError" ? ERROR_CODE_REQUEST_ABORT : ERROR_CODE_REQUEST_DEFAULT,
-                            message: e.name === "AbortError" ? undefined : e.message || "请求资源异常",
-                            option: requestOption,
-                            e
-                        };
-                        if (e.name !== "AbortError") {
-                            console.error(e);
-                        }
-                        this.execError(error, reject);
-                    })
-                    .finally(() => {
-                        remove(this.requestList, process);
-                        if (timeOutTimer) {
-                            clearTimeout(timeOutTimer);
-                        }
-                    });
+                let { body, headers } = transformRequestBody(requestOption.data);
+                fetchOptions = {
+                    body,
+                    headers: Object.assign(headers, requestOption.headers),
+                    method: requestOption.method,
+                    signal: controller.signal
+                };
             }
 
             this.requestList.push(process);
+
+            fetch(requestOption.url, fetchOptions)
+                .then(async (response) => {
+                    if (!response.ok) {
+                        let data = await response.text();
+                        reject({
+                            code: response.status.toString(),
+                            message: data ?? response.statusText,
+                            option: requestOption
+                        });
+                        return;
+                    }
+
+                    if (requestOption.rspType === "stream") {
+                        let reader = response.body?.getReader();
+                        let decoder = new TextDecoder();
+                        if (reader) {
+                            while (true) {
+                                let { done, value } = await reader.read();
+                                let chunk = decoder.decode(value);
+                                const sseBlocks = chunk.split("\n\n").filter(Boolean);
+                                sseBlocks.map((n) => {
+                                    const dataMatch = n.match(/^data:\s*(.*)/);
+                                    if (dataMatch) {
+                                        // 流式回调允许在重试时重新触发（符合预期）
+                                        requestOption.stream?.(dataMatch[1] || "");
+                                    }
+                                });
+                                if (done) {
+                                    // 流式完成，直接 resolve（不触发成功回调）
+                                    resolve(undefined);
+                                    break;
+                                }
+                            }
+                        } else {
+                            reject({
+                                code: response.status.toString(),
+                                message: "流式数据无响应",
+                                option: requestOption
+                            });
+                        }
+                    } else {
+                        let jsonData = await response.json();
+                        await handleResponse(jsonData, response);
+                    }
+                })
+                .catch((e) => {
+                    let error = {
+                        code: e.name === "AbortError" ? ERROR_CODE_REQUEST_ABORT : ERROR_CODE_REQUEST_DEFAULT,
+                        message: e.name === "AbortError" ? undefined : e.message || "请求资源异常",
+                        option: requestOption,
+                        e
+                    };
+                    if (e.name !== "AbortError") {
+                        console.error(e);
+                    }
+                    reject(error);
+                })
+                .finally(() => {
+                    remove(this.requestList, process);
+                    if (timeOutTimer) clearTimeout(timeOutTimer);
+                });
         });
     }
 
@@ -283,7 +251,6 @@ export class Requester<T = {}> {
             if (filter) {
                 if (!filter(request.option)) continue;
             }
-
             request.cancel();
         }
     }
@@ -294,14 +261,12 @@ export class Requester<T = {}> {
         }
     }
 
-    private execBeforeEvent(option: RequestOption<T>) {
+    private execBeforeEvent(option: RequestOption & T) {
         for (let callBack of this.beforeCallbacks.callbacks) {
-            //@ts-ignore 串行
             if (callBack(option) === false) {
                 return false;
             }
         }
-
         return true;
     }
 
@@ -311,7 +276,6 @@ export class Requester<T = {}> {
 
     private getCache(cacheId: string) {
         let cache = requestCache.get(cacheId);
-
         if (cache) {
             if (cache.date && cache.expiresIn) {
                 if (Date.now() - cache.date > cache.expiresIn) {
@@ -319,13 +283,35 @@ export class Requester<T = {}> {
                     return;
                 }
             }
-
             return cache.data;
         }
     }
 
+    private setCache(requestOption: RequestOption & T, data: any) {
+        if (!requestOption.cache) return;
+        let cacheOption = requestOption.cache === true ? { id: "" } : requestOption.cache;
+        requestCache.set(`${requestOption.url}|${cacheOption.id}`, {
+            date: Date.now(),
+            expiresIn: cacheOption.expires,
+            data
+        });
+    }
+
+    /** 判断错误是否可重试（仅当确定服务器未受理请求时） */
+    private shouldRetry(error: any): boolean {
+        const code = error?.code;
+        if (!code) return false;
+        // 用户取消不重试
+        if (code === ERROR_CODE_REQUEST_ABORT) return false;
+        // 网络错误：请求未到达服务器，可安全重试
+        if (code === ERROR_CODE_REQUEST_DEFAULT) return true;
+        // 超时：可能是本地网络问题导致请求未到达服务器，重试
+        if (code === ERROR_CDODE_TIME_OUT) return true;
+        // 5xx/429：服务器已受理请求，不重试（避免重复副作用）
+        return false;
+    }
+
     private execError(error: RequestError<T>, reject: Function, response?: Response) {
-        //字典翻译
         if (this.option.errorCodeMessage) {
             error.message = this.option.errorCodeMessage[error.code] ?? error.message;
         }
@@ -333,11 +319,9 @@ export class Requester<T = {}> {
             for (let callback of this.afterCallbacks.callbacks) {
                 callback(error.option, error, response);
             }
-
             for (let callback of this.errorCallbacks.callbacks) {
                 callback(error, response);
             }
-
             if (error.option.error) {
                 if (error.option.error(error, response) === false) {
                     reject(error);
@@ -350,11 +334,11 @@ export class Requester<T = {}> {
         if (this.option.defaultErrorFunc) {
             this.option.defaultErrorFunc(error, response);
         }
-
         reject(error);
     }
 }
 
+// ---------- 类型定义 ----------
 export type RequestQueueItem = {
     cancel: Function;
     option: RequestOption;
@@ -368,64 +352,42 @@ export type RequestError<T = any> = {
     e?: Error;
 };
 
-/**
- * 请求处理程序配置
- */
 export type RequesterOption = {
-    /** 请求地址根 */
     base?: string;
-
-    /**
-     * 接口超时时间
-     * 当设置为false时，不做超时处理
-     * @default 10s
-     */
     timeout?: number | false;
-
-    /** 错误码-信息映射转译 */
     errorCodeMessage?: Record<string, string>;
-
-    /** 自定义默认错误处理 */
     defaultErrorFunc?: (err: RequestError, response?: Response) => void;
-
-    /** 自定义请求数据转换 */
     transformReqData?: (
         data: any,
         option: RequestOption & Record<string, any>,
         requesteroption: RequesterOption
     ) => any | Promise<any>;
-
-    /** 自定义服务端返回数据转换 */
     transformRspData?: (
         data: any,
         option: RequestOption & Record<string, any>,
         requesteroption: RequesterOption
     ) => any | Promise<any>;
-
-    /** 自定义解析rsp数据，并进行成功、失败分流 */
     analyRspResult?: (
         data: any,
         success: (data: any) => void,
         error: (err: Omit<RequestError, "option">) => void,
         response: Response
     ) => void;
-
     mock?: (option: RequestOption & Record<string, any>) => Promise<any>;
+    /** 全局最大重试次数（默认 0） */
+    maxRetry?: number;
+    /** 全局重试间隔（毫秒，默认 0 表示立即重试） */
+    retryDelay?: number;
 };
 
 export type RequestMethod = "GET" | "POST" | "DELETE" | "PUT";
 
 export type RequestCacheOption = {
     id: string;
-    //毫秒
     expires?: number;
 };
 
-/**
- * 请求参数配置
- */
 export type RequestOption<T = any> = {
-    /** 请求ID，可用于主动取消*/
     id?: string;
     url: string;
     method: RequestMethod;
@@ -433,12 +395,15 @@ export type RequestOption<T = any> = {
     rspType?: "json" | "stream";
     timeout?: number | false;
     cache?: RequestCacheOption | true;
-    //强制刷新缓存
     forceRefreshCache?: boolean;
     headers?: Record<string, any>;
     error?: (err: RequestError, response?: Response) => void | false;
     success?: (data: any, response?: Response) => void;
     stream?: (chunk: string, response?: Response) => void;
+    /** 请求级重试次数（覆盖全局） */
+    retry?: number;
+    /** 请求级重试间隔（毫秒，覆盖全局） */
+    retryDelay?: number;
 };
 
 function transformRequestBody(data: any) {
