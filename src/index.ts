@@ -35,7 +35,6 @@ export class Requester<T = {}> {
             {
                 url,
                 method: "POST" as RequestMethod,
-                timeout: 10,
                 rspType: "json"
             },
             option
