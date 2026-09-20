@@ -185,11 +185,22 @@ export class Requester<T = {}> {
                 .then(async (response) => {
                     if (!response.ok) {
                         let data = await response.text();
-                        reject({
+                        let error: any = {
                             code: response.status.toString(),
-                            message: data ?? response.statusText,
+                            message: data || response.statusText,
                             option: requestOption
-                        });
+                        };
+                        // 尝试解析 JSON 错误体：完整数据放入 data，message 提取其中的 message 字段
+                        if (data) {
+                            try {
+                                let jsonData = JSON.parse(data);
+                                error.data = jsonData;
+                                error.message = jsonData?.error?.message ?? jsonData?.message ?? error.message;
+                            } catch (e) {
+                                // 非 JSON 错误体，保留原始文本
+                            }
+                        }
+                        reject(error);
                         return;
                     }
 
@@ -233,9 +244,7 @@ export class Requester<T = {}> {
                         option: requestOption,
                         e
                     };
-                    if (e.name !== "AbortError") {
-                        console.error(e);
-                    }
+
                     reject(error);
                 })
                 .finally(() => {
